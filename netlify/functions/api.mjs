@@ -171,9 +171,25 @@ async function route(c, S) {
   /* ---- admin ---- */
   if (p.startsWith('/api/admin/')) {
     if (limited('adm:' + c.ip, 60, 60e3)) return fail(429, 'slow down');
-    if (!isAdmin()) return fail(403, 'wrong admin key');
-    if (p === '/api/admin/users') return J(200, { ok: true, users: Object.values(db.users).map(x => Object.assign(pub(x), { banned: !!x.banned, subUntil: x.sub ? x.sub.until : 0, source: x.sub && x.sub.source, resetCode: x.reset && x.reset.exp > Date.now() ? x.reset.code : '' })).sort((a, z) => z.createdAt - a.createdAt) });
+    /* the admin is either the secret key (old /admin page) or a logged-in session of an owner e-mail (the Admin tab inside the app) */
+    const mb = /^Bearer ([0-9a-f]{64})$/.exec(h('authorization')), sx = mb && db.sessions[sha(mb[1])], ux = sx && sx.exp > Date.now() && db.users[sx.uid];
+    const byUser = ux && !ux.banned && OWNER_EMAILS.includes(ux.email) ? ux : null;
+    if (!isAdmin() && !byUser) return fail(403, 'Admin only');
+    const lastSeen = {}; for (const k of Object.keys(db.sessions)) { const x = db.sessions[k]; if (!lastSeen[x.uid] || x.at > lastSeen[x.uid]) lastSeen[x.uid] = x.at; }
+    if (p === '/api/admin/users') return J(200, { ok: true, me: byUser ? byUser.id : '', users: Object.values(db.users).map(x => Object.assign(pub(x), { banned: !!x.banned, owner: !!x.owner, lastSeen: lastSeen[x.id] || 0, subUntil: x.sub ? x.sub.until : 0, source: x.sub && x.sub.source, resetCode: x.reset && x.reset.exp > Date.now() ? x.reset.code : '' })).sort((a, z) => z.createdAt - a.createdAt) });
     const t = db.users[b.id] || findByEmail(normEmail(b.email)); if (!t) return fail(404, 'user not found');
+    const self = byUser && t.id === byUser.id;
+    if (p === '/api/admin/set') {      // exact: until = a date (ms), or days counted from today (0 = switch off)
+      if (b.until) { const u = +b.until; if (!(u > 0)) return fail(400, 'bad date'); t.sub = { until: u, source: 'admin', at: Date.now() }; }
+      else { const d = Math.max(0, Math.min(3650, Math.floor(+b.days || 0))); t.sub = d ? { until: Date.now() + d * DAY, source: 'admin', at: Date.now() } : null; }
+      touch(); return J(200, { ok: true, user: pub(t) });
+    }
+    if (p === '/api/admin/update') {
+      if (b.name != null) t.name = String(b.name).trim().slice(0, 40) || t.name;
+      if (b.email != null) { const e = normEmail(b.email); if (!validEmail(e)) return fail(400, 'Enter a valid e-mail.'); const o = findByEmail(e); if (o && o.id !== t.id) return fail(409, 'This e-mail is already used by another account.'); t.email = e; }
+      touch(); return J(200, { ok: true, user: pub(t) });
+    }
+    if (self && (p === '/api/admin/revoke' || p === '/api/admin/ban' || p === '/api/admin/delete')) return fail(400, 'You cannot do this to your own account.');
     if (p === '/api/admin/grant') { extend(t, Math.max(1, Math.min(3650, +b.days || 30)), 'admin'); return J(200, { ok: true, user: pub(t) }); }
     if (p === '/api/admin/revoke') { t.sub = null; touch(); return J(200, { ok: true }); }
     if (p === '/api/admin/ban') { t.banned = b.banned !== false; if (t.banned) dropSessions(t.id); touch(); return J(200, { ok: true }); }
