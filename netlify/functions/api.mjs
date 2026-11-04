@@ -194,7 +194,7 @@ async function route(c, S) {
     if (p === '/api/admin/revoke') { t.sub = null; touch(); return J(200, { ok: true }); }
     if (p === '/api/admin/ban') { t.banned = b.banned !== false; if (t.banned) dropSessions(t.id); touch(); return J(200, { ok: true }); }
     if (p === '/api/admin/delete') { delete db.users[t.id]; dropSessions(t.id); touch(); return J(200, { ok: true }); }
-    if (p === '/api/admin/password') { const n = String(b.password || ''); if (n.length < 8) return fail(400, 'min 8 characters'); Object.assign(t, newPw(n)); touch(); return J(200, { ok: true }); }
+    if (p === '/api/admin/password') { const n = String(b.password || ''); if (n.length < 6) return fail(400, 'min 8 characters'); Object.assign(t, newPw(n)); touch(); return J(200, { ok: true }); }
     return fail(404, 'unknown');
   }
 
@@ -210,7 +210,7 @@ async function route(c, S) {
     if (limited('reg:' + c.ip, 10, 3600e3)) return fail(429, 'Too many sign-ups from this address, try later.');
     const email = normEmail(b.email), name = String(b.name || '').trim().slice(0, 40), pw = String(b.password || '');
     if (!validEmail(email)) return fail(400, 'Enter a valid e-mail address.');
-    if (pw.length < 8 || pw.length > 200) return fail(400, 'Password must be at least 8 characters.');
+    if (pw.length < 6 || pw.length > 200) return fail(400, 'Password must be at least 6 characters.');
     if (findByEmail(email)) return fail(409, 'This e-mail is already registered. Log in instead.');
     const id = 'u' + (db.nextId++), pwd = newPw(pw);
     const user = db.users[id] = { id, email, name: name || email.split('@')[0], salt: pwd.salt, hash: pwd.hash, createdAt: Date.now(), sub: TRIAL_DAYS ? { until: Date.now() + TRIAL_DAYS * DAY, source: 'trial', at: Date.now() } : null };
@@ -234,7 +234,7 @@ async function route(c, S) {
   if (p === '/api/reset') {
     const email = normEmail(b.email), user = findByEmail(email), pw = String(b.password || '');
     if (limited('rs:' + c.ip + email, 10, 3600e3)) return fail(429, 'Too many attempts.');
-    if (pw.length < 8) return fail(400, 'Password must be at least 8 characters.');
+    if (pw.length < 6) return fail(400, 'Password must be at least 6 characters.');
     if (!user || !user.reset || user.reset.exp < Date.now() || user.reset.tries >= 5) return fail(400, 'The code is wrong or expired.');
     user.reset.tries++; touch();
     if (!teq(String(b.code || '').padEnd(6, ' '), user.reset.code)) return fail(400, 'The code is wrong or expired.');
@@ -249,7 +249,7 @@ async function route(c, S) {
   if (p === '/api/change-password') {
     if (!a) return fail(401, 'Please log in again.');
     if (!teq(hashPw(String(b.old || ''), a.u.salt), a.u.hash)) return fail(400, 'Current password is wrong.');
-    const pw = String(b.password || ''); if (pw.length < 8) return fail(400, 'Password must be at least 8 characters.');
+    const pw = String(b.password || ''); if (pw.length < 6) return fail(400, 'Password must be at least 6 characters.');
     Object.assign(a.u, newPw(pw)); dropSessions(a.u.id, a.key); touch(); return J(200, { ok: true });
   }
   if (p === '/api/checkout') {
