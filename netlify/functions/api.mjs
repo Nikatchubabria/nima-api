@@ -88,6 +88,13 @@ async function route(c, S) {
 
   if (M === 'GET' && (p === '/' || p === '/health' || p === '/api/health')) return J(200, { ok: true, service: 'nima-license', time: Date.now() });
   if (M === 'GET' && p === '/admin') return HTML(200, ADMIN_HTML);
+  if (M === 'GET' && p === '/api/live') {          // public: who is LIVE with NIMA Studio right now (website)
+    const st = store(), now = Date.now(), { blobs } = await st.list({ prefix: 'live/' });
+    const rows = (await Promise.all(blobs.slice(0, 200).map(x => st.get(x.key, { type: 'json' }).catch(() => null)))).filter(Boolean);
+    const live = rows.filter(r => now - r.ts < 5 * 60e3).sort((x, y) => y.viewers - x.viewers);
+    for (const r of rows) if (now - r.ts > 864e5) st.delete('live/' + r.name).catch(() => {});
+    return Object.assign(J(200, { ok: true, count: live.length, viewers: live.reduce((t, r) => t + r.viewers, 0), streamers: live.slice(0, 40).map(r => ({ name: r.name, viewers: r.viewers })) }), { headers: { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' } });
+  }
   if (M === 'GET' && p === '/api/pubkey') return J(200, { ok: true, publicKey: keys.pub, price: PRICE_TEXT, plan: PLAN_NAME, canPay: !!CHECKOUT_URL, google: !!(GOOGLE_ID && GOOGLE_SECRET) });
 
   /* ---- Google sign-in ---- */
@@ -244,6 +251,26 @@ async function route(c, S) {
   const m = /^Bearer ([0-9a-f]{64})$/.exec(h('authorization'));
   const ses = m && db.sessions[sha(m[1])], au = ses && ses.exp > Date.now() && db.users[ses.uid];
   const a = au && !au.banned ? { u: au, key: sha(m[1]) } : null;
+  if (p === '/api/live/ping') {
+    if (!a) return fail(401, 'Please log in again.');
+    const name = String(b.name || '').trim().replace(/^@/, '').toLowerCase();
+    if (!/^[a-z0-9_.]{2,40}$/.test(name)) return fail(400, 'bad name');
+    const viewers = Math.max(0, Math.min(1e7, Math.floor(+b.viewers || 0)));
+    await store().setJSON('live/' + name, { name, viewers, ts: Date.now(), uid: a.u.id });
+    return J(200, { ok: true });
+  }
+  /* per-account app settings (games, looks, overlays choices): one JSON blob per user, so they follow the account to any PC */
+  if (p === '/api/settings') {
+    if (!a) return fail(401, 'Please log in again.');
+    if (b && b.set) {
+      const txt = JSON.stringify(b.data || {});
+      if (txt.length > 4e6) return fail(413, 'Settings are too large.');
+      await store().setJSON('settings/' + a.u.id, { ts: Date.now(), data: b.data || {} });
+      return J(200, { ok: true });
+    }
+    const got = await store().get('settings/' + a.u.id, { type: 'json' }).catch(() => null);
+    return J(200, { ok: true, data: (got && got.data) || null, ts: (got && got.ts) || 0 });
+  }
   if (p === '/api/me') { if (!a) return fail(401, 'Please log in again.'); return session(a.u, ''); }
   if (p === '/api/logout') { if (a) { delete db.sessions[a.key]; touch(); } return J(200, { ok: true }); }
   if (p === '/api/change-password') {
