@@ -231,11 +231,20 @@ async function route(c, S) {
     if (user.banned) return fail(403, 'This account is blocked.');
     return session(user, newSession(user, b.device));
   }
-  if (p === '/api/forgot') {     // no e-mail service on the free plan: the code is shown to the admin in /admin and sent by hand
+  if (p === '/api/forgot') {     // e-mails the code via Resend when RESEND_API_KEY is set; otherwise the admin sees it in /admin
     const email = normEmail(b.email);
     if (limited('fg:' + c.ip, 8, 3600e3)) return fail(429, 'Too many requests.');
     const user = findByEmail(email);
-    if (user) { user.reset = { code: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), exp: Date.now() + 15 * 60e3, tries: 0 }; touch(); }
+    if (user) {
+      user.reset = { code: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), exp: Date.now() + 15 * 60e3, tries: 0 }; touch();
+      const RK = E.RESEND_API_KEY || '', FROM = E.MAIL_FROM || 'NIMA Studio <onboarding@resend.dev>';
+      if (RK) {   // e-mail the code (Resend); without a key the code stays visible to the admin in /admin
+        try {
+          const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: 'Bearer ' + RK, 'content-type': 'application/json' }, body: JSON.stringify({ from: FROM, to: [user.email], subject: 'NIMA Studio password reset code', text: 'Your NIMA Studio password reset code is ' + user.reset.code + '\n\nIt is valid for 15 minutes. If you did not ask for it, ignore this e-mail.', html: '<p>Your NIMA Studio password reset code:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">' + user.reset.code + '</p><p>It is valid for 15 minutes. If you did not ask for it, ignore this e-mail.</p>' }) });
+          if (!r.ok) console.error('resend', r.status, await r.text());
+        } catch (e) { console.error('resend', e && e.message); }
+      }
+    }
     return J(200, { ok: true });
   }
   if (p === '/api/reset') {
