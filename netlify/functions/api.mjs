@@ -91,7 +91,9 @@ async function route(c, S) {
   if (M === 'GET' && p === '/api/live') {          // public: who is LIVE with NIMA Studio right now (website)
     const st = store(), now = Date.now(), { blobs } = await st.list({ prefix: 'live/' });
     const rows = (await Promise.all(blobs.slice(0, 200).map(x => st.get(x.key, { type: 'json' }).catch(() => null)))).filter(Boolean);
-    const live = rows.filter(r => now - r.ts < 5 * 60e3).sort((x, y) => y.viewers - x.viewers);
+    const isPaid = r => { const u = r.uid && db.users[r.uid]; return !!(u && !u.banned && u.sub && u.sub.until > now); };
+    const onlyPaid = c.q.get('paid') === '1';      // ?paid=1 -> only streamers with an active subscription (duel list)
+    const live = rows.filter(r => now - r.ts < 5 * 60e3 && (!onlyPaid || isPaid(r))).sort((x, y) => y.viewers - x.viewers);
     for (const r of rows) if (now - r.ts > 864e5) st.delete('live/' + r.name).catch(() => {});
     return Object.assign(J(200, { ok: true, count: live.length, viewers: live.reduce((t, r) => t + r.viewers, 0), streamers: live.slice(0, 40).map(r => ({ name: r.name, viewers: r.viewers })) }), { headers: { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' } });
   }
