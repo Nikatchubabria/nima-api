@@ -300,10 +300,33 @@ async function route(c, S) {
   return fail(404, 'unknown endpoint');
 }
 
+/* Duel relay (fallback when two game windows cannot connect directly): each side writes its own small message list and reads the other's.
+ * No account database is touched, so polling is cheap. Rooms are random, short-lived and size-capped. */
+const RF = (code, msg) => new Response(JSON.stringify({ ok: false, error: msg }), { status: code, headers: { 'content-type': 'application/json' } });
+async function duelRelay(raw, ip) {
+  let b; try { b = JSON.parse(raw); } catch (_) { return RF(400, 'bad request'); }
+  const room = String(b.room || ''), role = b.role === 'h' ? 'h' : b.role === 'g' ? 'g' : '';
+  if (!/^[a-z0-9]{6,24}$/.test(room) || !role) return RF(400, 'bad room');
+  if (limited('rl:' + ip, 400, 60e3)) return RF(429, 'slow down');
+  const st = store(), mine = 'duel/' + room + '/' + role, theirs = 'duel/' + room + '/' + (role === 'h' ? 'g' : 'h');
+  const send = (Array.isArray(b.send) ? b.send : []).slice(0, 60).filter(m => m && typeof m === 'object' && JSON.stringify(m).length < 700);
+  if (send.length) {
+    const cur = (await st.get(mine, { type: 'json' }).catch(() => null)) || { n: 0, msgs: [] };
+    for (const m of send) { cur.n++; cur.msgs.push({ i: cur.n, m }); }
+    cur.msgs = cur.msgs.slice(-200); cur.ts = Date.now();
+    await st.setJSON(mine, cur);
+  }
+  const since = Math.max(0, Math.floor(+b.since) || 0);
+  const o = await st.get(theirs, { type: 'json' }).catch(() => null);
+  const msgs = o ? o.msgs.filter(x => x.i > since).slice(0, 100) : [];
+  return new Response(JSON.stringify({ ok: true, msgs: msgs.map(x => x.m), next: msgs.length ? msgs[msgs.length - 1].i : since }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+}
+
 export default async (req, context) => {
   try {
     const u = new URL(req.url), M = req.method;
     let p = u.pathname.replace(/^\/\.netlify\/functions\/api/, '') || '/';
+    if (M === 'POST' && p === '/api/duel/relay') { const len0 = +req.headers.get('content-length') || 0; if (len0 > 40000) return RF(413, 'too large'); return await duelRelay((await req.text()).slice(0, 40000), (context && context.ip) || String(req.headers.get('x-nf-client-connection-ip') || '')); }
     if (M === 'POST') { const len = +req.headers.get('content-length') || 0; if (len > 1e6) return new Response(JSON.stringify({ ok: false, error: 'too large' }), { status: 413 }); }
     const raw = M === 'POST' ? (await req.text()).slice(0, 1e6) : '';
     const c = { M, p, origin: u.origin, q: u.searchParams, raw, h: n => String(req.headers.get(n) || ''), ip: (context && context.ip) || String(req.headers.get('x-nf-client-connection-ip') || req.headers.get('x-forwarded-for') || '').split(',')[0].trim() };
