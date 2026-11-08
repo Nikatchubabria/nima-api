@@ -333,7 +333,7 @@ async function updateFeed() {
   const r = await fetch('https://api.github.com/repos/Nikatchubabria/nima-studio-download/releases/latest', { headers: H });
   if (!r.ok) { if (c && c.yml) return c.yml; throw new Error('github ' + r.status); }
   const rel = await r.json(), A = rel.assets || [];
-  const ya = A.find(a => a.name === 'latest.yml'), pa = A.find(a => /\.nsis\.7z$/.test(a.name));
+  const ya = A.find(a => a.name === 'latest.yml'), pa = A.find(a => /\.nsis\.7z$/.test(a.name) || a.name === 'NIMA-Studio-Setup.exe' && a.size > 20e6);
   if (!ya || !pa) { if (c && c.yml) return c.yml; throw new Error('release incomplete'); }
   const y = await fetch(ya.url, { headers: Object.assign({}, H, { accept: 'application/octet-stream' }) });
   if (!y.ok) { if (c && c.yml) return c.yml; throw new Error('yml ' + y.status); }
@@ -348,6 +348,7 @@ export default async (req, context) => {
     const u = new URL(req.url), M = req.method;
     let p = u.pathname.replace(/^\/\.netlify\/functions\/api/, '') || '/';
     { const mm = M === 'GET' && p.match(/^\/api\/update\/(nima-studio-(\d+\.\d+\.\d+)-x64\.nsis\.7z)$/); if (mm) return new Response(null, { status: 302, headers: { location: 'https://github.com/Nikatchubabria/nima-studio-download/releases/download/v' + mm[2] + '/' + mm[1], 'cache-control': 'no-store' } }); }
+    if (M === 'GET' && p === '/api/update/NIMA-Studio-Setup.exe') return new Response(null, { status: 302, headers: { location: 'https://github.com/Nikatchubabria/nima-studio-download/releases/latest/download/NIMA-Studio-Setup.exe', 'cache-control': 'no-store' } });
     if (M === 'GET' && /^\/api\/update\/.*\.blockmap$/.test(p)) return RF(404, 'no blockmap');
     if (M === 'GET' && p === '/api/update/latest.yml') { try { return new Response(await updateFeed(), { status: 200, headers: { 'content-type': 'text/yaml; charset=utf-8', 'cache-control': 'public, max-age=60' } }); } catch (e) { return RF(502, 'update feed unavailable'); } }
     if (M === 'POST' && p === '/api/duel/relay') { const len0 = +req.headers.get('content-length') || 0; if (len0 > 40000) return RF(413, 'too large'); return await duelRelay((await req.text()).slice(0, 40000), (context && context.ip) || String(req.headers.get('x-nf-client-connection-ip') || '')); }
