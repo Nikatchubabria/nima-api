@@ -322,10 +322,34 @@ async function duelRelay(raw, ip) {
   return new Response(JSON.stringify({ ok: true, msgs: msgs.map(x => x.m), next: msgs.length ? msgs[msgs.length - 1].i : since }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
 
+/* Auto-update feed for the app (generic provider): the app asks us for latest.yml instead of scraping github.com web pages,
+ * which are slow / flaky for some users. We read the newest release through the GitHub API and cache it for 5 minutes; the package file name in
+ * latest.yml stays relative, so the app asks us for it and we redirect it to the GitHub download. (If this endpoint fails, the app falls back to its old GitHub feed.) */
+async function updateFeed() {
+  const st = store(), c = await st.get('upd/cache', { type: 'json' }).catch(() => null);
+  if (c && c.yml && Date.now() - c.ts < 5 * 60e3) return c.yml;
+  const H = { 'user-agent': 'nima-api', accept: 'application/vnd.github+json' };
+  if (process.env.GH_TOKEN) H.authorization = 'Bearer ' + process.env.GH_TOKEN;
+  const r = await fetch('https://api.github.com/repos/Nikatchubabria/nima-studio-download/releases/latest', { headers: H });
+  if (!r.ok) { if (c && c.yml) return c.yml; throw new Error('github ' + r.status); }
+  const rel = await r.json(), A = rel.assets || [];
+  const ya = A.find(a => a.name === 'latest.yml'), pa = A.find(a => /\.nsis\.7z$/.test(a.name));
+  if (!ya || !pa) { if (c && c.yml) return c.yml; throw new Error('release incomplete'); }
+  const y = await fetch(ya.url, { headers: Object.assign({}, H, { accept: 'application/octet-stream' }) });
+  if (!y.ok) { if (c && c.yml) return c.yml; throw new Error('yml ' + y.status); }
+  let yml = await y.text();
+  if (!/^version:\s*\S+/m.test(yml)) throw new Error('bad yml');
+  await st.setJSON('upd/cache', { ts: Date.now(), yml }).catch(() => {});
+  return yml;
+}
+
 export default async (req, context) => {
   try {
     const u = new URL(req.url), M = req.method;
     let p = u.pathname.replace(/^\/\.netlify\/functions\/api/, '') || '/';
+    { const mm = M === 'GET' && p.match(/^\/api\/update\/(nima-studio-(\d+\.\d+\.\d+)-x64\.nsis\.7z)$/); if (mm) return new Response(null, { status: 302, headers: { location: 'https://github.com/Nikatchubabria/nima-studio-download/releases/download/v' + mm[2] + '/' + mm[1], 'cache-control': 'no-store' } }); }
+    if (M === 'GET' && /^\/api\/update\/.*\.blockmap$/.test(p)) return RF(404, 'no blockmap');
+    if (M === 'GET' && p === '/api/update/latest.yml') { try { return new Response(await updateFeed(), { status: 200, headers: { 'content-type': 'text/yaml; charset=utf-8', 'cache-control': 'public, max-age=60' } }); } catch (e) { return RF(502, 'update feed unavailable'); } }
     if (M === 'POST' && p === '/api/duel/relay') { const len0 = +req.headers.get('content-length') || 0; if (len0 > 40000) return RF(413, 'too large'); return await duelRelay((await req.text()).slice(0, 40000), (context && context.ip) || String(req.headers.get('x-nf-client-connection-ip') || '')); }
     if (M === 'POST') { const len = +req.headers.get('content-length') || 0; if (len > 1e6) return new Response(JSON.stringify({ ok: false, error: 'too large' }), { status: 413 }); }
     const raw = M === 'POST' ? (await req.text()).slice(0, 1e6) : '';
