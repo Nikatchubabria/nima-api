@@ -343,12 +343,32 @@ async function updateFeed() {
   return yml;
 }
 
+/* Installer download: GitHub's download endpoint now and then answers 504 for a moment. We ask GitHub ourselves (retrying a few times) and hand the person the final
+   signed file address, so the browser never meets that 504. If GitHub stays down, the plain GitHub address is used as before. */
+const GH_DL = 'https://github.com/Nikatchubabria/nima-studio-download/releases/latest/download/NIMA-Studio-Setup.exe';
+async function installerUrl() {
+  const t0 = Date.now();
+  for (let i = 0; i < 6 && Date.now() - t0 < 7500; i++) {
+    try {
+      let url = GH_DL;
+      for (let hop = 0; hop < 4; hop++) {
+        const r = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(3000) });
+        const loc = r.headers.get('location');
+        if (r.status >= 300 && r.status < 400 && loc) { url = new URL(loc, url).href; if (!/^https:\/\/github\.com\//.test(url)) return url; } else break;
+      }
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return GH_DL;
+}
+const dlResp = async () => new Response(null, { status: 302, headers: { location: await installerUrl(), 'cache-control': 'no-store' } });
+
 export default async (req, context) => {
   try {
     const u = new URL(req.url), M = req.method;
     let p = u.pathname.replace(/^\/\.netlify\/functions\/api/, '') || '/';
     { const mm = M === 'GET' && p.match(/^\/api\/update\/(nima-studio-(\d+\.\d+\.\d+)-x64\.nsis\.7z)$/); if (mm) return new Response(null, { status: 302, headers: { location: 'https://github.com/Nikatchubabria/nima-studio-download/releases/download/v' + mm[2] + '/' + mm[1], 'cache-control': 'no-store' } }); }
-    if (M === 'GET' && p === '/api/update/NIMA-Studio-Setup.exe') return new Response(null, { status: 302, headers: { location: 'https://github.com/Nikatchubabria/nima-studio-download/releases/latest/download/NIMA-Studio-Setup.exe', 'cache-control': 'no-store' } });
+    if (M === 'GET' && (p === '/api/update/NIMA-Studio-Setup.exe' || p === '/api/dl')) return await dlResp();
     if (M === 'GET' && /^\/api\/update\/.*\.blockmap$/.test(p)) return RF(404, 'no blockmap');
     if (M === 'GET' && p === '/api/update/latest.yml') { try { return new Response(await updateFeed(), { status: 200, headers: { 'content-type': 'text/yaml; charset=utf-8', 'cache-control': 'public, max-age=60' } }); } catch (e) { return RF(502, 'update feed unavailable'); } }
     if (M === 'POST' && p === '/api/duel/relay') { const len0 = +req.headers.get('content-length') || 0; if (len0 > 40000) return RF(413, 'too large'); return await duelRelay((await req.text()).slice(0, 40000), (context && context.ip) || String(req.headers.get('x-nf-client-connection-ip') || '')); }
