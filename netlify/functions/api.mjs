@@ -327,7 +327,7 @@ async function duelRelay(raw, ip) {
  * latest.yml stays relative, so the app asks us for it and we redirect it to the GitHub download. (If this endpoint fails, the app falls back to its old GitHub feed.) */
 async function updateFeed() {
   const st = store(), c = await st.get('upd/cache', { type: 'json' }).catch(() => null);
-  if (c && c.yml && Date.now() - c.ts < 5 * 60e3) return c.yml;
+  if (c && c.yml && Date.now() - c.ts < 60e3) return c.yml;   /* 1 min: a rebuilt release must reach the app quickly */
   const H = { 'user-agent': 'nima-api', accept: 'application/vnd.github+json' };
   if (process.env.GH_TOKEN) H.authorization = 'Bearer ' + process.env.GH_TOKEN;
   const r = await fetch('https://api.github.com/repos/Nikatchubabria/nima-studio-download/releases/latest', { headers: H });
@@ -339,6 +339,8 @@ async function updateFeed() {
   if (!y.ok) { if (c && c.yml) return c.yml; throw new Error('yml ' + y.status); }
   let yml = await y.text();
   if (!/^version:\s*\S+/m.test(yml)) throw new Error('bad yml');
+  /* the yml must describe the installer that is on the release RIGHT NOW (a re-run build replaces the exe): otherwise the app would see a sha512 mismatch; fail -> the app uses the GitHub feed */
+  const ym = yml.match(/^\s+size:\s*(\d+)/m); if (ym && pa.name === 'NIMA-Studio-Setup.exe' && +ym[1] !== pa.size) throw new Error('latest.yml does not match the installer (' + ym[1] + ' vs ' + pa.size + ')');
   await st.setJSON('upd/cache', { ts: Date.now(), yml }).catch(() => {});
   return yml;
 }
